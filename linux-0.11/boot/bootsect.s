@@ -45,15 +45,20 @@ ROOT_DEV = 0x306
 entry start
 start:
 	mov	ax,#BOOTSEG
-	mov	ds,ax
+	mov	ds,ax  !!;; 将ds赋值为 0x07c0; 刚开机时计算处于实模式, 此时寻址方式是 段寄存:offset 的形式.
 	mov	ax,#INITSEG
-	mov	es,ax
-	mov	cx,#256
-	sub	si,si
-	sub	di,di
+	mov	es,ax  !!;; 将es赋值为 0x9000;
+	mov	cx,#256  !!;; 10进制的256
+	sub	si,si !!;; 清零si
+	sub	di,di  !!;; 清零di
 	rep
-	movw
-	jmpi	go,INITSEG
+	movw  !!;; rep movw => 重复执行movw(复制一个字, word 2byte) 指令, 重复的次数在cx寄存器中, 从 ds:si 复制到 es:di
+	!!;; 即从 0x07c00 复制到 0x90000, 总共复制了 512 byte = 2 * 256
+
+	jmpi	go,INITSEG  !!;; cs=INITSEG, ip=go
+	!!;; 跳转到 0x9000:go 这个地方执行, jmpi 段间跳转指令; go 是一个标签, 最终编译成机器码的时候会被翻译成
+	!!;; 一个值, 该值就是go这个标签在文件内的偏移地址. 即: go 这个标签在被编译成二进制文件里的内存地址偏移量;
+	!!;; 这样就刚好执行到 go 标签所处的这行代码: mov ax, cs
 go:	mov	ax,cs
 	mov	ds,ax
 	mov	es,ax
@@ -69,12 +74,15 @@ load_setup:
 	mov	cx,#0x0002		! sector 2, track 0
 	mov	bx,#0x0200		! address = 512, in INITSEG
 	mov	ax,#0x0200+SETUPLEN	! service 2, nr of sectors
-	int	0x13			! read it
+	int	0x13			! read it !!;; 发起0x13号中断, 上面的四条指令用来给 dx,cx,bx,ax赋值. 这4个寄存器是作为这个中断程序的
+	!!;; 参数, 这叫做通过寄存器来传参.
+	!!;; 从硬盘的第2个扇区开始, 将数据加载到内存 0x90200处, 共加载4个扇区
+	
 	jnc	ok_load_setup		! ok - continue
 	mov	dx,#0x0000
 	mov	ax,#0x0000		! reset the diskette
 	int	0x13
-	j	load_setup
+	j	load_setup  !!;;jmp load_setup 不断重试
 
 ok_load_setup:
 
@@ -136,7 +144,8 @@ root_defined:
 ! the setup-routine loaded directly after
 ! the bootblock:
 
-	jmpi	0,SETUPSEG
+	jmpi	0,SETUPSEG  !!;; 前面的代码是把从硬盘第6个扇区开始往后的240个扇区加载到内存0x10000处, 然后跳转到 0x90200处执行,
+	!!;; 这是第二个扇区开始处的内容, 这里的内容就是 setup.s 的内容了.
 
 ! This routine loads the system at address 0x10000, making sure
 ! no 64kB boundaries are crossed. We try to load it as fast as
