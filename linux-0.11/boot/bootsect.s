@@ -51,20 +51,21 @@ start:
 	mov	cx,#256  !!;; 10进制的256
 	sub	si,si !!;; 清零si
 	sub	di,di  !!;; 清零di
-	rep
-	movw  !!;; rep movw => 重复执行movw(复制一个字, word 2byte) 指令, 重复的次数在cx寄存器中, 从 ds:si 复制到 es:di
+	rep  !!;; rep 重复指令前缀, 只会影响接下来的一条指令
+	movw  !!;; rep movw => 重复执行movw(复制一个字 w: word, word=2byte) 指令, 重复的次数在cx寄存器中, 从 ds:si 复制到 es:di  
 	!!;; 即从 0x07c00 复制到 0x90000, 总共复制了 512 byte = 2 * 256
 
 	jmpi	go,INITSEG  !!;; cs=INITSEG, ip=go
-	!!;; 跳转到 0x9000:go 这个地方执行, jmpi 段间跳转指令; go 是一个标签, 最终编译成机器码的时候会被翻译成
+	!!;; 因为前面已经将代码移动到了 0x90000处了, 因此需要跳转到 0x9000:go 这个地方执行, 
+	!!;; jmpi 段间跳转指令; go 是一个标签, 最终编译成机器码的时候会被翻译成
 	!!;; 一个值, 该值就是go这个标签在文件内的偏移地址. 即: go 这个标签在被编译成二进制文件里的内存地址偏移量;
 	!!;; 这样就刚好执行到 go 标签所处的这行代码: mov ax, cs
-go:	mov	ax,cs
+go:	mov	ax,cs  !!;; cs = 0x9000
 	mov	ds,ax
 	mov	es,ax
 ! put stack at 0x9ff00.
 	mov	ss,ax
-	mov	sp,#0xFF00		! arbitrary value >>512
+	mov	sp,#0xFF00		! arbitrary(任意的) value >>512
 
 ! load the setup-sectors directly after the bootblock.
 ! Note that 'es' is already set up.
@@ -74,12 +75,15 @@ load_setup:
 	mov	cx,#0x0002		! sector 2, track 0
 	mov	bx,#0x0200		! address = 512, in INITSEG
 	mov	ax,#0x0200+SETUPLEN	! service 2, nr of sectors
-	int	0x13			! read it !!;; 发起0x13号中断, 上面的四条指令用来给 dx,cx,bx,ax赋值. 这4个寄存器是作为这个中断程序的
+	int	0x13			! read it !!;; 发起0x13号中断, 0x13是读取磁盘扇区, 读取磁盘时使用的参数是:
+	!!;; ah=0x02 读磁盘, al=0x04 读取的扇区数量; ch=0x00 柱面号, cl=0x02 开始的扇区编号;
+	!!;; dh=0x00 磁头号, dl=0x00 驱动器号; es:bx(0x9000:0x0200) 存放读入内容的开始位置;
+	!!;; 上面的四条指令用来给 dx,cx,bx,ax赋值. 这4个寄存器是作为这个中断程序的
 	!!;; 参数, 这叫做通过寄存器来传参.
 	!!;; 从硬盘的第2个扇区开始, 将数据加载到内存 0x90200处, 共加载4个扇区
 	
-	jnc	ok_load_setup		! ok - continue
-	mov	dx,#0x0000
+	jnc	ok_load_setup		! ok - continue  !!;; 如果读取错误会设置CF=1; jnc=> jump if not cf
+	mov	dx,#0x0000  !!;; 读取错误, 重置ax,dx
 	mov	ax,#0x0000		! reset the diskette
 	int	0x13
 	j	load_setup  !!;;jmp load_setup 不断重试
@@ -89,17 +93,17 @@ ok_load_setup:
 ! Get disk drive parameters, specifically nr of sectors/track
 
 	mov	dl,#0x00
-	mov	ax,#0x0800		! AH=8 is get drive parameters
+	mov	ax,#0x0800		! AH=8 is get drive parameters !!;; 读取驱动器的参数信息
 	int	0x13
 	mov	ch,#0x00
 	seg cs
-	mov	sectors,cx
+	mov	sectors,cx  !!;; 将扇区数存到0x9000:sectors处
 	mov	ax,#INITSEG
 	mov	es,ax
 
 ! Print some inane message
 
-	mov	ah,#0x03		! read cursor pos
+	mov	ah,#0x03		! read cursor pos  !!;; 读光标, 调用号 0x03
 	xor	bh,bh
 	int	0x10
 	
@@ -107,7 +111,7 @@ ok_load_setup:
 	mov	bx,#0x0007		! page 0, attribute 7 (normal)
 	mov	bp,#msg1
 	mov	ax,#0x1301		! write string, move cursor
-	int	0x10
+	int	0x10  !!;; 显式字符串, 调用号 0x13, al=0x01表示显式模式
 
 ! ok, we've written the message, now
 ! we want to load the system (at 0x10000)
@@ -159,20 +163,20 @@ track:	.word 0			! current track
 
 read_it:
 	mov ax,es
-	test ax,#0x0fff
-die:	jne die			! es must be at 64kB boundary
+	test ax,#0x0fff  !!;; test 是将两个数做 and 运算
+die:	jne die			! es must be at 64kB boundary !!; jne => 使用ZF位, 当ZF=0时跳转; ZF=1时不跳转. jump if not equal => jump if !ZF
 	xor bx,bx		! bx is starting address within segment
 rp_read:
 	mov ax,es
-	cmp ax,#ENDSEG		! have we loaded all yet?
+	cmp ax,#ENDSEG		! have we loaded all yet? !!;; 0x1000 + 0x3000 SYSSEG + SYSSIZE
 	jb ok1_read
 	ret
 ok1_read:
 	seg cs
-	mov ax,sectors
-	sub ax,sread
+	mov ax,sectors  !!;; sectors 中存储了扇区的个数
+	sub ax,sread  !!;; 减去已经读入的扇区
 	mov cx,ax
-	shl cx,#9
+	shl cx,#9  !!;; 左移9位
 	add cx,bx
 	jnc ok2_read
 	je ok2_read
@@ -259,7 +263,7 @@ msg1:
 root_dev:
 	.word ROOT_DEV
 boot_flag:
-	.word 0xAA55
+	.word 0xAA55  !!;; 引导扇区的最后两个字节必须是: 0xAA55
 
 .text
 endtext:

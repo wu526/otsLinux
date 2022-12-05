@@ -42,7 +42,7 @@ start:
 
 ! Get memory size (extended mem, kB)
 
-	mov	ah,#0x88
+	mov	ah,#0x88  !!;; 获取扩展内存的调用号, 结果存在ax中, 1M以后的内存叫做扩展内存
 	int	0x15
 	mov	[2],ax
 
@@ -101,7 +101,7 @@ no_disk1:
 	mov	cx,#0x10
 	mov	ax,#0x00
 	rep
-	stosb
+	stosb  !!;; 将ax中的数据填充到 di 指向的内存中
 is_disk1:
 
 ! now we want to move to protected mode ...
@@ -203,13 +203,16 @@ empty_8042:
 	ret
 
 gdt:
+	!!;; 第0个段描述符, 必须是全0
 	.word	0,0,0,0		! dummy
 
+	!!;; 第1个段描述符
 	.word	0x07FF		! 8Mb - limit=2047 (2048*4096=8Mb)
 	.word	0x0000		! base address=0
 	.word	0x9A00		! code read/exec
 	.word	0x00C0		! granularity=4096, 386
 
+	!!;; 第2个段描述符
 	.word	0x07FF		! 8Mb - limit=2047 (2048*4096=8Mb)
 	.word	0x0000		! base address=0
 	.word	0x9200		! data read/write
