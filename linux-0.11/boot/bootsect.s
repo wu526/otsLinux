@@ -144,17 +144,20 @@ ok_load_setup:
 	seg cs
 !! 保存每磁道扇区数. 对于软盘来说(dl=0)	其最大磁道号不会超过256, 因此cl的位6、7是0,
 !! 前面又已置 ch = 0, 因此此时 cx 中是每磁道扇区数
-	mov	sectors,cx  !!;; 将扇区数存到0x9000:sectors处
+	mov	sectors,cx  !!;; 将每个磁道包含的扇区数存到0x9000:sectors处
 
 	mov	ax,#INITSEG
 	mov	es,ax
 
 ! Print some inane message
-
+!! BIOS中断0x10功能号: 0x03 读取光标位置; 输入: bh = 页号; 返回: ch=扫描开始线; cl=扫描结束线;
+!! dh=行号(0x00顶端); dl=列号(0x00最左边)
 	mov	ah,#0x03		! read cursor pos  !!;; 读光标, 调用号 0x03
 	xor	bh,bh
 	int	0x10
-	
+
+!! BIOS中断0x10, 功能号ah=0x13 显示字符串. 输入: al=放置光标的方式以及规定属性. 0x01表示使用bl中的属性, 光标停在字符串结尾
+!! es:bp 指向要显示的字符串起始位置处. cx=显示的字符串字符数; bh=显示页面号; bl=字符属性; dh=行号; dl=列号
 	mov	cx,#24
 	mov	bx,#0x0007		! page 0, attribute 7 (normal)
 	mov	bp,#msg1
@@ -166,31 +169,41 @@ ok_load_setup:
 
 	mov	ax,#SYSSEG
 	mov	es,ax		! segment of 0x010000
-	call	read_it
-	call	kill_motor
+	call	read_it  !! 读磁盘上 system 模块, es为输入参数
+	call	kill_motor  !! 关闭驱动器马达, 这样就可以知道驱动器的状态了
 
 ! After that we check which root-device to use. If the device is
 ! defined (!= 0), nothing is done and the given device is used.
 ! Otherwise, either /dev/PS0 (2,28) or /dev/at0 (2,8), depending
 ! on the number of sectors that the BIOS reports currently.
+!! 检查要使用哪个根文件系统设备(根设备), 如果以指定了设备(!=0)就直接使用给定的设备. 否则就需根据BIOS报告的每磁道扇区数
+!! 来确定到底使用 /dev/PS0(2,28), 还是 /dev/at0(2,8)
+!! 设备文件的含义:
+!! Linux中软驱的主设备号是2, 次设备号是: type * 4 + nr, 其中nr为0-3分别对应软驱A、B、C、D type是软驱类型(2->1.2M, 7->1.44M)
+!! 因为 7 * 4 + 0 = 28, 所以 /dev/PS0(2,28)指的是1.44M A驱动器, 其设备号是0x21c, 同理 /dev/at0(2,8)指的是1.2M A驱动器,
+!! 其设备号是 0x208
 
+!! rot_dev 定义在引导扇区508,509字节处, 指根文件系统所在设备号. 0x0306 指第2个硬盘第一个分区. 这个指需要根据自己根文件系统
+!! 所在硬盘和分区进行修改. 例如: 如果根文件系统在第1个硬盘的第1个分区上, 那么该值应该为 0x0301, 即(0x01,0x03), 如果根文件
+!! 系统在第2个bochs软盘上, 那么该值应该为 0x021D, 即(0x1D,0x02). 当编译内核时, 可以根据Makefile文件中另行指定该值.
+!! 内核映像文件Image的创建程序 tools/build 会使用指定的值来设置根文件系统所在设备号.
 	seg cs
 	mov	ax,root_dev
 	cmp	ax,#0
-	jne	root_defined
+	jne	root_defined  !! 如果sectors=15说明是 1.2M的驱动器; 如果sectors=18,则说明是1.44M软驱. 因为是可引导的驱动器, 所以是A驱动
 	seg cs
 	mov	bx,sectors
 	mov	ax,#0x0208		! /dev/ps0 - 1.2Mb
-	cmp	bx,#15
-	je	root_defined
+	cmp	bx,#15  !! 判断每磁道扇区数是否=15
+	je	root_defined  !! 如果等于, 则ax中就是引导驱动器的设备号
 	mov	ax,#0x021c		! /dev/PS0 - 1.44Mb
 	cmp	bx,#18
 	je	root_defined
-undef_root:
+undef_root:  !! 如果都不一样, 则死循环
 	jmp undef_root
 root_defined:
 	seg cs
-	mov	root_dev,ax
+	mov	root_dev,ax  !! 将检查过的设备号保存到 root_dev 中
 
 ! after that (everyting loaded), we jump to
 ! the setup-routine loaded directly after
@@ -200,83 +213,102 @@ root_defined:
 	!!;; 这是第二个扇区开始处的内容, 这里的内容就是 setup.s 的内容了.
 
 ! This routine loads the system at address 0x10000, making sure
-! no 64kB boundaries are crossed. We try to load it as fast as
+! no 64kB boundaries are crossed. We try to load it as fast as  !! 确定没有跨越64K的内存边界
 ! possible, loading whole tracks whenever we can.
 !
 ! in:	es - starting address segment (normally 0x1000)
 !
-sread:	.word 1+SETUPLEN	! sectors read of current track
-head:	.word 0			! current head
-track:	.word 0			! current track
 
+!! 伪操作符 .word 定义一个2字节目标. 相当于c中定义的变量和所占内存空间大小; 1+SETUPLEN 表示开始时以读入1个引导扇区和setup
+!! 程序所占的扇区数SETUPLEN
+sread:	.word 1+SETUPLEN	! sectors read of current track
+head:	.word 0			! current head  当前磁头
+track:	.word 0			! current track  当前磁道号
+
+!! 读取磁盘上的 system 模块.
+!! 首先测试输入的段值. 从磁盘上读入的数据必须存放在位于内存地址64k的边界开始处, 否则进入死循环. 清bx寄存器, 用于表示当前段内存放数据
+!! 的开始位置. 233行的test指令以比特位逻辑与两个操作数, 该操作只影响ZF位, AX=0x1000 & 0x0fff = 0 => ZF=1, 即jne条件不成立
 read_it:
 	mov ax,es
 	test ax,#0x0fff  !!;; test 是将两个数做 and 运算
 die:	jne die			! es must be at 64kB boundary !!; jne => 使用ZF位, 当ZF=0时跳转; ZF=1时不跳转. jump if not equal => jump if !ZF
 	xor bx,bx		! bx is starting address within segment
 rp_read:
+!! 判断是否以读入全部数据, 比较当前所读段是否就是系统数据末端所处的段(#ENDSEG), 如果不是就跳转到ok1_read 处继续读数据. 否则退出子程序
 	mov ax,es
 	cmp ax,#ENDSEG		! have we loaded all yet? !!;; 0x1000 + 0x3000 SYSSEG + SYSSIZE
 	jb ok1_read
 	ret
 ok1_read:
+!! 计算和验证当前磁道需要读取的扇区数, 放在ax中; 根据当前磁道还未读取的扇区数以及段内数据字节开始偏移位置, 计算如果全部读取这些未读
+!! 扇区, 所读总字节数是否会超过64K段长度的限制. 若超过, 则根据此次最多能读入的字节数(64K-段内偏移位置), 反算出此次需要读取的扇区数
 	seg cs
-	mov ax,sectors  !!;; sectors 中存储了扇区的个数
-	sub ax,sread  !!;; 减去已经读入的扇区
-	mov cx,ax
-	shl cx,#9  !!;; 左移9位
-	add cx,bx
-	jnc ok2_read
+	mov ax,sectors  !!;; sectors 中存储了每磁道扇区数
+	sub ax,sread  !!;; 减去当前磁道已读扇区数
+	mov cx,ax  !! cx = ax = 当前磁道未读扇区数
+	shl cx,#9  !!;; 左移9位, cx * 512 + 段内当前偏移值(bx)
+	add cx,bx !! = 此次读操作后, 段内共读入的字节数
+	jnc ok2_read  !! 没有超过64K, 则跳转到 ok2_read 处执行
 	je ok2_read
+	!! 若加上上次将读磁道上所有未读扇区时会超过64K, 则计算此时最多能读入的字节数(64k-段内读偏移地址), 在转换成需要读取的扇区数
+	!! 0减某数就是取该数64K的补值.
 	xor ax,ax
 	sub ax,bx
 	shr ax,#9
 ok2_read:
-	call read_track
-	mov cx,ax
-	add ax,sread
+!! 读当前磁道上指定开始扇区(cl)和需读取扇区数(al)的数据到 es:bx, 然后统计当前磁道上已经读取的扇区数并与磁道最大扇区数 sectors 比较
+!! 如果小于 sectors 说明当前磁道上还有未读扇区数据. 于是跳转到 ok3_read 继续读.
+	call read_track  !! 读当前磁道上指定开始扇区和需读取扇区数的数据
+	mov cx,ax  !! cx = 该次操作已读读取的扇区数
+	add ax,sread  !! 加上当前磁道上已经读取的扇区数
 	seg cs
-	cmp ax,sectors
+	cmp ax,sectors  !! 如果当前磁道上还有未读扇区, 跳转到 ok3_read 处
 	jne ok3_read
+	!! 若该磁道的当前磁头面所有扇区已经读取, 则读取该磁道的下一个磁头面(1号磁头)上的数据
 	mov ax,#1
-	sub ax,head
-	jne ok4_read
-	inc track
+	sub ax,head  !! 判断当前磁头号
+	jne ok4_read  !! 如果是磁头0, 则再去读1磁头面上的扇区数据
+	inc track  !! 否则去读下一磁道
 ok4_read:
-	mov head,ax
-	xor ax,ax
+	mov head,ax  !! 保存当前磁头号
+	xor ax,ax  !! 清当前磁道已读扇区数
 ok3_read:
-	mov sread,ax
-	shl cx,#9
-	add bx,cx
+!! 如果当前磁道上还有未读取扇区, 则首先保存当前磁道以读扇区数, 然后调整存放数据处的开始位置, 若小于64K边界值, 则跳转到 rp_read处,继续读数据
+	mov sread,ax  !! 保存当前磁道已读扇区数
+	shl cx,#9  !! 上次已读扇区数 * 512 字节
+	add bx,cx  !! 调整当前段内数据开始位置
 	jnc rp_read
+	!! 执行到这里说明已经读取64k 数据, 此时调整当前段, 为读下一段做准备
 	mov ax,es
-	add ax,#0x1000
+	add ax,#0x1000  !! 将段基址调整为下一个64K内存开始处
 	mov es,ax
-	xor bx,bx
-	jmp rp_read
+	xor bx,bx  !! 清段内数据开始偏移值
+	jmp rp_read  !! 跳转到 rp_read 处, 继续读数据
 
+!! read_track 子程序: 读当前磁道指定开始扇区和需读取扇区数的数据到 es:bx
 read_track:
 	push ax
 	push bx
 	push cx
 	push dx
-	mov dx,track
-	mov cx,sread
-	inc cx
-	mov ch,dl
-	mov dx,head
-	mov dh,dl
-	mov dl,#0
-	and dx,#0x0100
-	mov ah,#2
+	mov dx,track  !! 取当前磁道号
+	mov cx,sread  !! 取当前磁道上已读扇区数
+	inc cx  !! cl = 开始读取扇区数
+	mov ch,dl  !! dh=当前磁道号
+	mov dx,head  !! 取当前磁头号
+	mov dh,dl  !! dh = 磁头号
+	mov dl,#0  !! dl=驱动器号(0表示当前A驱动器)
+	and dx,#0x0100  !! 磁头号不大于1
+	mov ah,#2  !! ah=2, 读磁盘扇区功能号
 	int 0x13
-	jc bad_rt
+	jc bad_rt  !! 若出错, 则跳转到 bad_rt
 	pop dx
 	pop cx
 	pop bx
 	pop ax
 	ret
+
+!! 读磁盘出错, 则执行驱动器复位操作(磁盘中断功能号0), 再跳转到 read_track 处重试
 bad_rt:	mov ax,#0
 	mov dx,#0
 	int 0x13
@@ -291,15 +323,17 @@ bad_rt:	mov ax,#0
  * that we enter the kernel in a known state, and
  * don't have to worry about it later.
  */
+!! 0x3f2 是软盘控制器的一个端口, 称为数字输出寄存器(DOR)端口, 是一个8位寄存器, 其为7~4 分别用于控制4个软驱(D~A)的启动和关闭.
+!! 位3、2 用于允许、禁止DMA和中断请求以及启动/复位 软盘控制FDC. 位1、0用于选择操作的软驱.
 kill_motor:
 	push dx
 	mov dx,#0x3f2
-	mov al,#0
+	mov al,#0  !! 设置al=0, 就是用于选择A驱动器、关闭FDC、禁止DMA和中断请求,关闭马达.
 	outb
 	pop dx
 	ret
 
-sectors:
+sectors:  !! 存放当前启动软盘每磁道的扇区数
 	.word 0
 
 msg1:
@@ -307,9 +341,9 @@ msg1:
 	.ascii "Loading system ..."
 	.byte 13,10,13,10
 
-.org 508
+.org 508  !! 表示下面的语句从地址 508 开始
 root_dev:
-	.word ROOT_DEV
+	.word ROOT_DEV  !! 存放根文件系统所在的设备号(init/main.c会使用)
 boot_flag:
 	.word 0xAA55  !!;; 引导扇区的最后两个字节必须是: 0xAA55
 
