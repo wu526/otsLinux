@@ -5,15 +5,20 @@
 # removes any old dependencies. DON'T put your own dependencies here
 # unless it's something special (ie not a .c file).
 #
+# 注意: 依赖关系是由 make dep 自动进行的, 会自动去除原来的依赖信息, 不要把自己的依赖关系信息放在这里. 除非是特别的文件(即不是.c文件)
 
-AR	=gar
+AR	=gar  # GNU 的二进制文件处理程序, 用于创建、修改以及从归档文件中抽取文件
 AS	=gas
 LD	=gld
-LDFLAGS	=-s -x
+LDFLAGS	=-s -x  # 链接程序所有的参数, -s 输出文件中省略所有符号信息, -x 删除所有局部符号
 CC	=gcc
+# C 编译器选项, -fstrength-reduce 用于优化循环语句; -fcombine-regs 指明编译器在组合编译阶段把复制一个寄存器到另一个
+# 寄存器的指令组合在一起. -fomit-frame-pointer 指明对于无需帧指针(frame pointer)的喊声不要把帧指针
+# 保留在寄存器中. 这样在函数中可以避免对帧指针的操作和维护. -mstring-insns 是linus自己移植后新增的
+# -finline-functions 将所有简短的函数代码嵌入调用程序中, -nostdinc 不使用默认路径中的包含文件
 CFLAGS	=-Wall -O -fstrength-reduce -fomit-frame-pointer -fcombine-regs \
 	-finline-functions -mstring-insns -nostdinc -I../include
-CPP	=gcc -E -nostdinc -I../include
+CPP	=gcc -E -nostdinc -I../include  # C预处理器, -E 只运行预处理
 
 .c.s:
 	$(CC) $(CFLAGS) \
@@ -28,8 +33,9 @@ OBJS  = sched.o system_call.o traps.o asm.o fork.o \
 	panic.o printk.o vsprintf.o sys.o exit.o \
 	signal.o mktime.o
 
+# -r 用于指示生成可重定位的输出, 即产生可以作为链接器ld输入的目标文件
 kernel.o: $(OBJS)
-	$(LD) -r -o kernel.o $(OBJS)
+	$(LD) -r -o kernel.o $(OBJS)  
 	sync
 
 clean:
