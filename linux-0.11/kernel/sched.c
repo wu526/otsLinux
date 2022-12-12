@@ -143,37 +143,55 @@ void schedule(void)
 // 从任务数组中最后一个任务开始循环检测 alarm, 在循环时跳过空指针项.
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 		if (*p) {
+			// 如果设置过任务的定时值alarm, 且已经过期(alarm < jiffies), 则在信号位图中置SIGALRM
+			// 信号, 即向任务发送 SIGALARM 信号. 然后清 alarm. 该信号的默认操作时终止进程.
 			if ((*p)->alarm && (*p)->alarm < jiffies) {
 					(*p)->signal |= (1<<(SIGALRM-1));
 					(*p)->alarm = 0;
 				}
+			// 如果信号位图中除被阻塞的信号外还有其他信号, 且任务处于可中断状态, 则置任务
+			// 为就绪状态. _BLOCKABLE & (*p)->blocked 用于忽略被阻塞的信号, SIGKILL和
+			// SIGSTOP 不能被阻塞
 			if (((*p)->signal & ~(_BLOCKABLE & (*p)->blocked)) &&
 			(*p)->state==TASK_INTERRUPTIBLE)
-				(*p)->state=TASK_RUNNING;
+				(*p)->state=TASK_RUNNING;  // 置为就绪状态(可执行)
 		}
 
 /* this is the scheduler proper: */
-
-	while (1) {
+// 调度程序的主要部分
+	while (1) {  // line124
 		c = -1;
 		next = 0;
 		i = NR_TASKS;
 		p = &task[NR_TASKS];
+		// 从任务数组的最后一个任务开始循环处理, 并跳过不含任务的数组槽.比较每个就绪状态任务的
+		// counter(任务运行时间的递减滴答计数)值, 哪一个值大(即运行时间还不长), next就指向它
 		while (--i) {
 			if (!*--p)
 				continue;
 			if ((*p)->state == TASK_RUNNING && (*p)->counter > c)
 				c = (*p)->counter, next = i;
 		}
+		// 如果比较后有counter值不等于0, 或者系统中没有一个可运行的任务存在(此时c仍然为-1,next=0)
+		// 则退出line124 开始的循环, 执行 line141上的任务切换操作. 否则就根据每个任务的优先权值,
+		// 更新每一个任务的 counter 值, 然后回到 line124重新比较. counter=counter/2 + priority
+		// 这里的计算过程不考虑进程的状态.
 		if (c) break;
 		for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 			if (*p)
 				(*p)->counter = ((*p)->counter >> 1) +
 						(*p)->priority;
 	}
-	switch_to(next);
+	// 将当前任务指针 current 指向任务号为 next 的任务, 并切换到该任务中运行. next最开始
+	// 被初始化为0, 因此若系统没有任何其他任务可运行时, 则next=0, 因此调度函数会在系统空闲
+	// 时执行任务0, 此时任务0仅执行 pause()系统调用, 并又会调用本函数.
+	switch_to(next);  // 切换任务号为next的任务,并运行 line141
 }
 
+// pause 系统调用. 转换当前任务的状态为可中断的等待状态并重新调度.
+// 该系统调用将导致进程进入睡眠状态, 直到收到一个信号. 该信号用于终止进程或使进程调用一个
+// 信号捕获函数, 只有当捕获了一个信号且信号捕获处理函数返回, pause()才会返回. 此时pause()
+// 返回值应该是 -1, 且 errno 被置为 EINTR. 这里还没有完全实现, 直到0.95版
 int sys_pause(void)
 {
 	current->state = TASK_INTERRUPTIBLE;
@@ -181,48 +199,86 @@ int sys_pause(void)
 	return 0;
 }
 
+// 将当前任务置为不可中断的等待状态, 并让睡眠队列头指针指向当前任务. 只有明确的唤醒时才会
+// 返回. 该函数提供了进程与中断处理程序之间的同步机制. 函数参数p 是 等待任务队列头指针.
+// 指针是含有一个变量地址的变量. 由于 *p 指向的目标(这里是任务结构)会改变, 因此为了能修改
+// 调用该函数程序中原来就是指针变量的值, 就需要传递二级指针.
 void sleep_on(struct task_struct **p)
 {
 	struct task_struct *tmp;
 
+// 若指针无效, 则退出. (指针所指的对象可以是NULL, 但指针本身不应该是0). 如果当前任务是
+// 任务0, 则死机. 因为任务0的运行不依赖自己的状态, 所以内核代码把任务0置为睡眠状态无意义
 	if (!p)
 		return;
 	if (current == &(init_task.task))
 		panic("task[0] trying to sleep");
+
+	// 让tmp指向已经在等待队列上的任务(如果有的话), 如: inode->i_wait, 且将睡眠队列头的
+	// 等待指针指向当前任务. 这样就把当前任务插入到了 *p 的等待队列中, 然后将当前任务置为
+	// 不可中断的等待状态, 并指向重新调度
 	tmp = *p;
 	*p = current;
 	current->state = TASK_UNINTERRUPTIBLE;
 	schedule();
-	if (tmp)
+
+	// 只有当这个等待任务被唤醒时, 调度程序才又返回到这里, 表示本进程已被明确的唤醒(就绪)
+	// 既然大家都在等待同样的资源, 那么在资源可用时, 就有必要唤醒所有等待该资源的进程
+	// 该函数嵌套调用也会嵌套唤醒所有等待该资源的进程. 这里嵌套调用是指当一个进程调用了
+	// sleep_on() 后就会在该函数中被切换掉, 控制权转移到其他进程中. 此时若有进程也需要
+	// 使用同一资源, 那么也会使用同一个等待队列头指针作为参数调用 sleep_on()函数, 且也会
+	// 陷入 该函数而不返回. 只有当内核某处代码以队列头指针作为参数 wake_up了该队列,
+	// 那么当系统切换去执行头指针所指的进程A时, 该进程才会执行 line163, 把队列后一个进程
+	// B 置位就绪状态(唤醒). 当轮到B进程时, 它也才可能继续执行line163, 若它后面还有等待的
+	// 进程C, 那么会把C唤醒 等.
+	if (tmp)  // 若在其前还存在等待的任务, 则也将其置为就绪状态(唤醒) line163
 		tmp->state=0;
 }
 
+// 将当前任务置为可中断的等待状态, 并放入 *p 指定的等待队列中.
 void interruptible_sleep_on(struct task_struct **p)
 {
 	struct task_struct *tmp;
 
+	// 若指针无效, 则退出.
 	if (!p)
 		return;
+	// 如果当前任务是任务0, 则死机(impossible)
 	if (current == &(init_task.task))
 		panic("task[0] trying to sleep");
+
+	// 让 tmp 指向已经在等待队列上的任务(如果有的话), 如: inode->i_wait; 且将睡眠队列头
+	// 的等待指针指向当前任务. 这样就把任务插入到 *p 的等待队列中, 然后将当前任务置为可中断
+	// 的等待状态, 并执行重新调度
 	tmp=*p;
 	*p=current;
 repeat:	current->state = TASK_INTERRUPTIBLE;
 	schedule();
+
+	// 只有当这个任务被唤醒时, 程序才又会返回到这里. 表示进程已被明确的唤醒并执行. 如果等待
+	// 队列中还有等待任务, 且队列头指针所指向的任务不是当前任务时, 则将该等待任务置为可运行
+	// 的就绪状态, 且重新指向调度程序. 当指针 *p 所指向的不是当前任务时, 表示在当前任务被
+	// 放入队列后, 又有新的任务被插入等待队列前部. 因此先唤醒它们, 而让自己等待. 等待这些
+	// 后续进入队列的任务被唤醒执行时来唤醒本任务. 于是去执行重新调度.
 	if (*p && *p != current) {
 		(**p).state=0;
 		goto repeat;
 	}
+
+	// 这句有误, 应该时 *p = tmp, 让队列头指针指向其余等待任务, 否则在当前任务之前插入
+	// 等待队列的任务均被抹掉了, 同时也需要删除 line192 的语句 ??? #TODO
 	*p=NULL;
 	if (tmp)
 		tmp->state=0;
 }
 
+// 唤醒 *p 指向的任务. *p 是任务等待队列头指针, 由于新等待任务是插入在等待队列头指针处
+// 的, 因此唤醒的是最后进入等待队列的任务.
 void wake_up(struct task_struct **p)
 {
 	if (p && *p) {
-		(**p).state=0;
-		*p=NULL;
+		(**p).state=0;  // 设为就绪状态(可运行)
+		*p=NULL;  // line192
 	}
 }
 
@@ -231,25 +287,49 @@ void wake_up(struct task_struct **p)
  * proper. They are here because the floppy needs a timer, and this
  * was the easiest way of doing it.
  */
-static struct task_struct * wait_motor[4] = {NULL,NULL,NULL,NULL};
-static int  mon_timer[4]={0,0,0,0};
-static int moff_timer[4]={0,0,0,0};
-unsigned char current_DOR = 0x0C;
+// 在阅读这段代码前可以先看一下块设备中有关软盘驱动程序 floppy.c 的说明.
+// 时间单位: 1个滴答=10ms=1/100秒
 
+// 存放等待软驱马达启动到正常转速的进程指针. 数组索引0-3分别对应软驱A-D
+static struct task_struct * wait_motor[4] = {NULL,NULL,NULL,NULL};
+// 存放各软驱马达启动所需要的滴答数, 程序中默认启动时间为50个滴答(0.5秒)
+static int  mon_timer[4]={0,0,0,0};
+// 存放各软驱在马达停转之前需维持的时间, 程序中设定为10000个滴答(100s)
+static int moff_timer[4]={0,0,0,0};
+// 对应软驱控制器中当前数字输出寄存器. 该寄存器每位定义如下:
+/*
+位7-4: 分别控制驱动器D-A马达的启动, 1启动,0关闭
+位3: 1-允许DMA和中断请求; 0-禁止DMA和中断请求
+位2: 1-启动软盘控制器; 0-恢复软盘控制器
+位1-0: 00-11用于选择控制的软驱 A-D
+*/
+unsigned char current_DOR = 0x0C; // 初值为:允许DMA和中断请求,启动FDC
+
+// 指定软驱启动到正常运转状态所需等待时间
+// nr-软驱号(0-3), 返回值为滴答数
+// 局部变量 selected 是选中软驱标志(blk_drv/floppy.c). mask 是所选软驱对应的数字输出
+// 寄存器中启动马达bit位. mask 高4位是各软驱启动马达标志.
 int ticks_to_floppy_on(unsigned int nr)
 {
 	extern unsigned char selected;
 	unsigned char mask = 0x10 << nr;
 
+// 系统最多有4个软驱. 首先预先设置好指定软驱 nr 停转之前需要经过的时间(100s), 然后取当前
+// DOR 寄存器值到临时变量 mask 中, 并把指定软驱的马达启动标志置位
 	if (nr>3)
 		panic("floppy_on: nr>3");
 	moff_timer[nr]=10000;		/* 100 s = very big :-) */
 	cli();				/* use floppy_off to turn it off */
 	mask |= current_DOR;
+	// 如果当前没有选择软驱, 则首先复位其他软驱的选择位, 然后置指定软驱选择位.
 	if (!selected) {
 		mask &= 0xFC;
 		mask |= nr;
 	}
+	// 如果数字输出寄存器的当前值与要求的值不同, 则向FDC数字输出端口输出新值(mask)
+	// 且如果要求启动的马达还没有启动, 则置相应软驱的马达启动定时器值(HZ/2=0.5s或50个滴答)
+	// 若已经启动, 则再设置启动定时为2个滴答, 能满足下面 do_floppy_timer()中先递减后判断
+	// 的要求. 执行本次定时代码的要求即可. 此后更新当前数字输出寄存器 current_DOR
 	if (mask != current_DOR) {
 		outb(mask,FD_DOR);
 		if ((mask ^ current_DOR) & 0xf0)
@@ -258,63 +338,82 @@ int ticks_to_floppy_on(unsigned int nr)
 			mon_timer[nr] = 2;
 		current_DOR = mask;
 	}
-	sti();
-	return mon_timer[nr];
+	sti();  // 开启中断
+	return mon_timer[nr];  // 返回启动马达所需要的时间值
 }
 
+// 等待指定软驱马达启动所需的一段时间, 然后返回. 设置指定软驱的马达启动到正常转速所需要的
+// 延时, 然后睡眠等待, 在定时中断过程中会一直递减这里设定的延时值. 当延时到期, 就会唤醒
+// 这里的等待进程
 void floppy_on(unsigned int nr)
 {
 	cli();
+	// 如果马达启动定时还没到, 就一直把当前进程置为不可中断睡眠状态并放入等待马达运行的队列中
 	while (ticks_to_floppy_on(nr))
 		sleep_on(nr+wait_motor);
 	sti();
 }
 
+// 置关闭相应软驱马达停转定时器3s
+// 若不使用该函数明确关闭指定的软驱mad, 则在马达开启100s后也会被关闭
 void floppy_off(unsigned int nr)
 {
 	moff_timer[nr]=3*HZ;
 }
 
+// 软盘定时处理子程序. 更新马达启动定时值和马达关闭停转计时值. 该子程序会在时钟定时中断
+// 过程中被调用, 因此系统每经过一个滴答就会被调用一次, 随时更新马达开启或停转定时器的值
+// 如果某个马达停转定时到, 则将该数字输出寄存器马达启动位复位.
 void do_floppy_timer(void)
 {
 	int i;
 	unsigned char mask = 0x10;
 
 	for (i=0 ; i<4 ; i++,mask <<= 1) {
-		if (!(mask & current_DOR))
+		if (!(mask & current_DOR))  // 如果不是DOR指定的马达则跳过
 			continue;
-		if (mon_timer[i]) {
+		if (mon_timer[i]) {  // 如果马达启动定时到 则唤醒进程
 			if (!--mon_timer[i])
 				wake_up(i+wait_motor);
-		} else if (!moff_timer[i]) {
+		} else if (!moff_timer[i]) {  // 如果马达停转定时到则复位相应马达启动位,且更新数字输出寄存器
 			current_DOR &= ~mask;
 			outb(current_DOR,FD_DOR);
 		} else
-			moff_timer[i]--;
+			moff_timer[i]--;  // 马达停转计时递减
 	}
 }
 
+// 定时器代码, 最多64个定时器
 #define TIME_REQUESTS 64
 
+// 定时器链表结构和定时器数组. 该定时器链表用于共软驱关闭马达和启动马达定时操作. 这种类型
+// 定时器类似现代 linux 系统中的动态定时器, 仅供内核使用
 static struct timer_list {
-	long jiffies;
-	void (*fn)();
-	struct timer_list * next;
-} timer_list[TIME_REQUESTS], * next_timer = NULL;
+	long jiffies;  // 定时滴答数
+	void (*fn)();  // 定时处理程序
+	struct timer_list * next;  // 链接指向下一个定时器
+} timer_list[TIME_REQUESTS], * next_timer = NULL;  // next_timer 定时器队列头指针
 
+// 添加定时器. 输入参数为指定的定时值(滴答数)和相应的处理程序指针.
+// 软盘驱动程序(floopy.c) 利用该函数执行启动或关闭马达的延时操作
+// *fn 定时时间到时执行的函数, jiffies 以10ms记的滴答数
 void add_timer(long jiffies, void (*fn)(void))
 {
 	struct timer_list * p;
 
+// 如果定时处理指针为空, 则退出
 	if (!fn)
 		return;
 	cli();
+	// 如果定时值 <=0, 则立刻调用其处理程序, 且该定时器不加入链表中
 	if (jiffies <= 0)
 		(fn)();
 	else {
+		// 从定时器数组中找一个空闲项
 		for (p = timer_list ; p < timer_list + TIME_REQUESTS ; p++)
 			if (!p->fn)
 				break;
+		// 如果已经用完了定时器数组, 则系统崩溃. 否则向定时器数组结构填入相应信息, 并链入链表头
 		if (p >= timer_list + TIME_REQUESTS)
 			panic("No more time requests free");
 		p->fn = fn;
