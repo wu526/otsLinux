@@ -420,6 +420,9 @@ void add_timer(long jiffies, void (*fn)(void))
 		p->jiffies = jiffies;
 		p->next = next_timer;
 		next_timer = p;
+// 链表项按定时值从小到大排序, 在排序时减去排在前面需要的滴答数, 这样在处理定时器时只要
+// 看链表头的第一项的定时是否到期即可. #TODO: 如果新插入的定时器值小于原来头一个定时器值
+// 时, 则不会进入循环中, 但此时还是应该将紧随其后面的一个定时器值减去新的第1个的定时值??
 		while (p->next && p->next->jiffies < p->jiffies) {
 			p->jiffies -= p->next->jiffies;
 			fn = p->fn;
@@ -434,39 +437,57 @@ void add_timer(long jiffies, void (*fn)(void))
 	sti();
 }
 
+// 时钟中断C函数处理程序, 在 system_call.s 中 _timer_interrupt 被调用. 参数 cpl 是当前
+// 特权级0或3, 是时钟中断发生时正在被执行的代码选择符中的特权级.
+// cpl=0表示中断发生时正在执行内核代码; cpl=3中断发生时正在执行用户代码.
+// 对于一个进程由于执行时间片用完时, 则进行任务切换, 并执行一个计时更新工作
 void do_timer(long cpl)
 {
-	extern int beepcount;
-	extern void sysbeepstop(void);
+	extern int beepcount;  // 扬声器发声时间滴答数(kernel/chr_drv/console.c)
+	extern void sysbeepstop(void);  // 关闭扬声器(kernel/chr_drv/console.c)
 
+// 如果发声计数次数到则关闭发声. 向0x61口发送命令, 复位位0和1. 位0控制 8253, 计数器2
+// 的工作, 位1控制扬声器
 	if (beepcount)
 		if (!--beepcount)
 			sysbeepstop();
 
+// 如果当前特权级为0, 则将内核代码运行时间 stime 递增
 	if (cpl)
-		current->utime++;
+		current->utime++;  // 用户程序在工作, utime增加
 	else
 		current->stime++;
 
+// 如果有定时器存在, 则将链表第1个定时器的值 -1, 如果已经等于0则调用相应的处理程序,并
+// 将该处理程序指针置空, 然后去掉该项定时器. next_timer 是定时器链表的头指针.
 	if (next_timer) {
 		next_timer->jiffies--;
 		while (next_timer && next_timer->jiffies <= 0) {
-			void (*fn)(void);
+			void (*fn)(void);  // 插入函数指针定义
 			
 			fn = next_timer->fn;
 			next_timer->fn = NULL;
 			next_timer = next_timer->next;
-			(fn)();
+			(fn)();  // 调用处理函数
 		}
 	}
+// 如果当前软盘控制器 FDC 的数字输出寄存器中马达启动位有置位, 则执行软盘定时程序
 	if (current_DOR & 0xf0)
 		do_floppy_timer();
+// 如果进程运行时间还没有完, 则退出. 否则置当前任务运行计数值位0, 并且若发生时钟中断时
+// 正在内核代码中运行则返回, 否则调用执行调度函数
 	if ((--current->counter)>0) return;
 	current->counter=0;
-	if (!cpl) return;
+	if (!cpl) return;  // 内核态程序, 不依赖 counter 值进行调度
 	schedule();
 }
 
+// 系统调用功能 - 设置报警定时时间值(s)
+// 如果 seconds >0, 则设置新定时值, 并返回原定时时刻还剩余的间隔时间. 否则返回0
+// 进程数据结构中报警定时值 alarm 的单位时系统滴答(1滴答=10ms), 是系统开机起到设置定时
+// 操作时系统滴答值 jiffies 和转换成滴答单位的定时值之和, 即: jiffies + HZ*定时秒值
+// 参数给出的是以秒为单位的定时值, 因此本函数的主要操作时进行两种单位的转换. HZ=100,
+// 是内核系统运行频率, 定义在 include/sched.h, seconds 是新的定时时间, 单位是秒.
 int sys_alarm(long seconds)
 {
 	int old = current->alarm;
@@ -477,21 +498,25 @@ int sys_alarm(long seconds)
 	return (old);
 }
 
+// 取当前进程号
 int sys_getpid(void)
 {
 	return current->pid;
 }
 
+// 取父进程号
 int sys_getppid(void)
 {
 	return current->father;
 }
 
+// 取用户号 uid
 int sys_getuid(void)
 {
 	return current->uid;
 }
 
+// 取有效的用户号 euid
 int sys_geteuid(void)
 {
 	return current->euid;
@@ -507,6 +532,7 @@ int sys_getegid(void)
 	return current->egid;
 }
 
+// 系统调用功能: 降低对CPU的使用优先权
 int sys_nice(long increment)
 {
 	if (current->priority-increment>0)
@@ -514,15 +540,27 @@ int sys_nice(long increment)
 	return 0;
 }
 
+// 内核调度程序的初始化子程序
 void sched_init(void)
 {
 	int i;
-	struct desc_struct * p;
+	struct desc_struct * p;  // 描述符表结构指针
 
-	if (sizeof(struct sigaction) != 16)
+// linux 系统开发之处, 内还不成熟, 内核代码会被经常修改. linus 怕自己无意中修改了这些关键
+// 性数据结构, 造成与posix标志不兼容, 因此加入下面这个判断语句, 纯粹是为了提醒自己以及其他
+// 修改内核代码的人
+	if (sizeof(struct sigaction) != 16)  // sigactioin 存放有关信号状态的结构
 		panic("Struct sigaction MUST be 16 bytes");
+
+// 在全局描述符表中设置初始任务(任务0)的任务状态段描述符和局部数据表描述符
+// FIRST_TSS_ENTRY 和 FIRST_LDT_ENTRY 的值分别是4和5, 定义在 include/linux/sched.h
+// gdt 是一个描述符表数组(include/linux/head.h), 实际上对应程序 head.s 中的全局描述符
+// 表基址(_gdt), 因此 gdt+FIRST_TSS_ENTRY 即为 gdt[FIRST_IDT_ENTRY](即gdt[4])
 	set_tss_desc(gdt+FIRST_TSS_ENTRY,&(init_task.task.tss));
 	set_ldt_desc(gdt+FIRST_LDT_ENTRY,&(init_task.task.ldt));
+
+// 清任务数组和描述符表项(注意: i=1开始, 所以初始任务的描述符还在), 描述符项结构定义在
+// 文件 include/linux/head.h中
 	p = gdt+2+FIRST_TSS_ENTRY;
 	for(i=1;i<NR_TASKS;i++) {
 		task[i] = NULL;
@@ -532,12 +570,23 @@ void sched_init(void)
 		p++;
 	}
 /* Clear NT, so that we won't have troubles with that later on */
+// 清除标志寄存器中的 NT位.
+// NT 标志用于控制程序的递归调用(Nested task), 当NT置位时, 当前中断任务执行 iret 指令时
+// 就会引擎任务切换. NT 指出 tss 中的 back_link 字段是否有效.
 	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");
+// 将任务0的tss段选择符加载到任务寄存器tr, 将局部描述符表段选择符加载到局部描述符表寄存器
+// ldtr 中. 注意: 是将 GDT 中相应LDT描述符的选择符加载到 ldrt, 以后新任务LDT的加载,是
+//CPU根据TSS中的LDT项自动加载
 	ltr(0);
 	lldt(0);
+// 用于初始化 8253 定时器, 通道0, 选择工作方式3, 二进制计数方式. 通道0的输出引脚接在中断
+// 控制主芯片的 IRQ0上, 每10ms发一个IRQ0请求. LATCH是初始定时计数值	
 	outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
-	outb_p(LATCH & 0xff , 0x40);	/* LSB */
-	outb(LATCH >> 8 , 0x40);	/* MSB */
+	outb_p(LATCH & 0xff , 0x40);	/* LSB */  // 定时值低字节
+	outb(LATCH >> 8 , 0x40);	/* MSB */  // 定时值高字节
+
+// 设置时钟中断处理程序句柄(设置时钟中断门), 修改中断控制器屏蔽码, 允许时钟中断.
+// 然后设置系统调用中断门
 	set_intr_gate(0x20,&timer_interrupt);
 	outb(inb_p(0x21)&~0x01,0x21);
 	set_system_gate(0x80,&system_call);
