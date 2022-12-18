@@ -30,7 +30,7 @@ OBJS  = tty_io.o console.o keyboard.o serial.o rs_io.o \
 chr_drv.a: $(OBJS)
 	$(AR) rcs chr_drv.a $(OBJS)
 	sync
-
+# -traditional 选项用来对程序做修改使其支持传统的C编译器
 keyboard.s: keyboard.S ../../include/linux/config.h
 	$(CPP) -traditional keyboard.S -o keyboard.s
 
