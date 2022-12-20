@@ -18,7 +18,7 @@ CPP	=gcc -E -nostdinc -I../include
 OBJS=	open.o read_write.o inode.o file_table.o buffer.o super.o \
 	block_dev.o char_dev.o file_dev.o stat.o exec.o pipe.o namei.o \
 	bitmap.o fcntl.o ioctl.o truncate.o
-
+# 选项-r用于指示生成可重定位的输出, 即产生可以作为连接器ld输入的目标文件
 fs.o: $(OBJS)
 	$(LD) -r -o fs.o $(OBJS)
 
