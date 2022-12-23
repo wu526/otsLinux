@@ -2,31 +2,34 @@
 #define _A_OUT_H
 
 #define __GNU_EXEC_MACROS__
-
-struct exec {
-  unsigned long a_magic;	/* Use macros N_MAGIC, etc for access */
-  unsigned a_text;		/* length of text, in bytes */
-  unsigned a_data;		/* length of data, in bytes */
-  unsigned a_bss;		/* length of uninitialized data area for file, in bytes */
-  unsigned a_syms;		/* length of symbol table data in file, in bytes */
-  unsigned a_entry;		/* start address */
-  unsigned a_trsize;		/* length of relocation info for text, in bytes */
-  unsigned a_drsize;		/* length of relocation info for data, in bytes */
+//line6~line108是该文件第1部分, 定义目标文件执行结构以及相关操作的宏定义
+struct exec { //line6 目标文件头结构
+  unsigned long a_magic;	/* Use macros N_MAGIC, etc for access */ //执行文件魔数, 使用N_MAGIC宏访问
+  unsigned a_text;		/* length of text, in bytes */ //代码长度, 字节数
+  unsigned a_data;		/* length of data, in bytes */ //数据长度, 字节数
+  unsigned a_bss;		/* length of uninitialized data area for file, in bytes */ //文件中的未初始化数据区长度, 字节数
+  unsigned a_syms;		/* length of symbol table data in file, in bytes */ //文件中的符号表长度,字节数
+  unsigned a_entry;		/* start address */ //执行开始地址
+  unsigned a_trsize;		/* length of relocation info for text, in bytes */ //代码重定位信息长度, 字节数
+  unsigned a_drsize;		/* length of relocation info for data, in bytes */ //数据重定位信息长度, 字节数
 };
-
+//用于取上述exec结构中的魔数
 #ifndef N_MAGIC
 #define N_MAGIC(exec) ((exec).a_magic)
 #endif
 
 #ifndef OMAGIC
-/* Code indicating object file or impure executable.  */
-#define OMAGIC 0407
-/* Code indicating pure executable.  */
-#define NMAGIC 0410
-/* Code indicating demand-paged executable.  */
-#define ZMAGIC 0413
-#endif /* not OMAGIC */
-
+/* Code indicating object file or impure executable.  *///指明为目标文件或不纯的可执行文件的代号
+#define OMAGIC 0407 //历史上最早在PDP-11计算机上,魔数(幻数)是8进制0407(0x107). 位于执行程序头结构的
+//开始处, 原本是PDP-11的一条跳转指令,表示跳转到随后7个字节后的代码开始处. 这样加载程序(loader)就可以
+//在把执行文件放入内存后直接跳转到指令开始处运行. 现在已没有程序使用这种方法. 但这个8进制数却作为
+//识别文件类型的标志(魔数)保留了下来. OMAGIC 可以认为是 old magic
+/* Code indicating pure executable.  */ //指明为纯可执行文件的代号 New Magic, 1975年后开始使用,涉及虚存机制
+#define NMAGIC 0410  //0410=0x108
+/* Code indicating demand-paged executable.  */ //指明为需求分页处理的可执行文件, 其头结构占用文件开始处1K空间
+#define ZMAGIC 0413 //0413=0x10b
+#endif /* not OMAGIC */ //另外还有一个QMAGIC,是为了节约磁盘容量,把盘上执行文件的头结构与代码紧凑存放
+//下面宏用于判断魔数字段的正确性,如果魔数不能被识别,则返回真
 #ifndef N_BADMAG
 #define N_BADMAG(x)					\
  (N_MAGIC(x) != OMAGIC && N_MAGIC(x) != NMAGIC		\
@@ -36,42 +39,45 @@ struct exec {
 #define _N_BADMAG(x)					\
  (N_MAGIC(x) != OMAGIC && N_MAGIC(x) != NMAGIC		\
   && N_MAGIC(x) != ZMAGIC)
-
+//目标文件头结构末端到1024字节之间的长度
 #define _N_HDROFF(x) (SEGMENT_SIZE - sizeof (struct exec))
-
+//下面宏用于操作目标文件的内容, 包括.o模块文件和可执行文件;
+//代码部分起始偏移值; 如果文件是ZMAGIC类型的,即执行文件,那么代码部分是从执行文件的1024字节偏移
+//处开始; 否则执行代码部分紧随执行头结构末端(32字节)开始,即文件时模块文件(OMAGIC)类型
 #ifndef N_TXTOFF
 #define N_TXTOFF(x) \
  (N_MAGIC(x) == ZMAGIC ? _N_HDROFF((x)) + sizeof (struct exec) : sizeof (struct exec))
 #endif
-
+//数据部分起始偏移值,从代码部分末端开始
 #ifndef N_DATOFF
 #define N_DATOFF(x) (N_TXTOFF(x) + (x).a_text)
 #endif
-
+//代码重定位信息偏移值, 从数据部分末端开始
 #ifndef N_TRELOFF
 #define N_TRELOFF(x) (N_DATOFF(x) + (x).a_data)
 #endif
-
+//数据重定位信息偏移值, 从代码重定位信息末端开始
 #ifndef N_DRELOFF
 #define N_DRELOFF(x) (N_TRELOFF(x) + (x).a_trsize)
 #endif
-
+//符号表偏移值, 从数据段重定位表末端开始
 #ifndef N_SYMOFF
 #define N_SYMOFF(x) (N_DRELOFF(x) + (x).a_drsize)
 #endif
-
+//字符串信息偏移值, 在符号表之后
 #ifndef N_STROFF
 #define N_STROFF(x) (N_SYMOFF(x) + (x).a_syms)
 #endif
-
-/* Address of text segment in memory after it is loaded.  */
+//下面对可执行文件被加载到内存(逻辑空间)中的位置情况进行操作
+/* Address of text segment in memory after it is loaded.  */ //代码段加载后在内存中的地址
 #ifndef N_TXTADDR
-#define N_TXTADDR(x) 0
+#define N_TXTADDR(x) 0 //可见, 代码段从地址0开始执行
 #endif
 
 /* Address of data segment in memory after it is loaded.
    Note that it is up to you to define SEGMENT_SIZE
-   on machines not listed here.  */
+   on machines not listed here.  *///数据段加载后在内存中的地址, 注意: 对于下面没有列出名称的
+//机器,需要自己来定义对应的 SEGMENT_SIZE
 #if defined(vax) || defined(hp300) || defined(pyr)
 #define SEGMENT_SIZE PAGE_SIZE
 #endif
@@ -88,39 +94,42 @@ struct exec {
 #define PAGE_SIZE 0x400
 #define SEGMENT_SIZE PAGE_SIZE
 #endif
-
+// Linux0.11内核把内存页定义为4K,段大小定义为1K, 因此没有使用上面的定义.
 #define PAGE_SIZE 4096
 #define SEGMENT_SIZE 1024
-
+//以段为界的大小(进位方式)
 #define _N_SEGMENT_ROUND(x) (((x) + SEGMENT_SIZE - 1) & ~(SEGMENT_SIZE - 1))
-
+//代码段尾地址
 #define _N_TXTENDADDR(x) (N_TXTADDR(x)+(x).a_text)
-
+//数据段开始地址; 如果文件是OMAGIC类型的, 那么数据段就直接紧随代码段后面. 否则的话数据段地址从
+//代码段后面段边界开始1K边界对齐. 如: ZMAGIC类型的文件
 #ifndef N_DATADDR
 #define N_DATADDR(x) \
     (N_MAGIC(x)==OMAGIC? (_N_TXTENDADDR(x)) \
      : (_N_SEGMENT_ROUND (_N_TXTENDADDR(x))))
 #endif
 
-/* Address of bss segment in memory after it is loaded.  */
+/* Address of bss segment in memory after it is loaded.  */ //bss段加载到内存以后的地址
+//未初始化数据段bss位于数据段后面,紧跟数据段
 #ifndef N_BSSADDR
 #define N_BSSADDR(x) (N_DATADDR(x) + (x).a_data)
-#endif
-
-#ifndef N_NLIST_DECLARED
+#endif //line108
+//第line110~line185是第二部分,对目标文件中的符号表项和相关操作宏进行定义和说明, a.out目标
+//文件中符号表项结构(符号表记录结构)
+#ifndef N_NLIST_DECLARED //line110
 struct nlist {
   union {
     char *n_name;
     struct nlist *n_next;
     long n_strx;
   } n_un;
-  unsigned char n_type;
+  unsigned char n_type; //该字节分成3个字段, line146~line154行是相应字段的屏蔽码
   char n_other;
   short n_desc;
   unsigned long n_value;
 };
 #endif
-
+//下面定义nlist结构中 n_type 字段值的常量符号
 #ifndef N_UNDF
 #define N_UNDF 0
 #endif
@@ -142,25 +151,27 @@ struct nlist {
 #ifndef N_FN
 #define N_FN 15
 #endif
-
-#ifndef N_EXT
-#define N_EXT 1
+//以下3个常量定义是nlist结构中 n_type字段的屏蔽码(8进制表示)
+#ifndef N_EXT //line146
+#define N_EXT 1 //0x01 符号是否是外部的(全局的)
 #endif
 #ifndef N_TYPE
-#define N_TYPE 036
+#define N_TYPE 036 //0x1e 符号的类型位
 #endif
-#ifndef N_STAB
-#define N_STAB 0340
-#endif
+#ifndef N_STAB // STAB 符号表类型 symbol table types
+#define N_STAB 0340 //0xe0 这几个bit用于符号调试器
+#endif //line154
 
 /* The following type indicates the definition of a symbol as being
    an indirect reference to another symbol.  The other symbol
    appears as an undefined reference, immediately following this symbol.
-
+下面的类型指明对一个符号的定义是作为对另一个符号的间接引用. 紧接该符号的其他的符号呈现为未定义的引用
    Indirection is asymmetrical.  The other symbol's value will be used
    to satisfy requests for the indirect symbol, but not vice versa.
    If the other symbol does not have a definition, libraries will
-   be searched to find a definition.  */
+   be searched to find a definition.  
+这种间接引用是不对称的,另一个符号的值将被用于满足间接符号的要求,但反之则不然.如果另一个符号没有
+定义,则将搜索库来寻找一个定义 */
 #define N_INDR 0xa
 
 /* The following symbols refer to set elements.
@@ -168,50 +179,55 @@ struct nlist {
    Space is allocated for the set in the text section, and each set
    element's value is stored into one word of the space.
    The first word of the space is the length of the set (number of elements).
-
+下面的符号与集合元素有关. 所有具有相同名称N_SET[ATDB]的符号形成一个集合. 在代码部分中已为集合
+分配了空间,且每个集合元素的值存放在一个字(word)的空间中, 空间的第一个字存有集合的长度(集合元素数目)
    The address of the set is made into an N_SETV symbol
    whose name is the same as the name of the set.
    This symbol acts like a N_DATA global symbol
-   in that it can satisfy undefined external references.  */
-
+   in that it can satisfy undefined external references.  
+集合的地址被放入一个N_SETV符号中, 它的名称与集合同名. 在满足未定义的外部引用方面, 该符号的
+行为象一个N_DATA全局符号*/
+//以下这些符号在.o文件中是作为链接程序ld的输入
 /* These appear as input to LD, in a .o file.  */
-#define	N_SETA	0x14		/* Absolute set element symbol */
-#define	N_SETT	0x16		/* Text set element symbol */
-#define	N_SETD	0x18		/* Data set element symbol */
-#define	N_SETB	0x1A		/* Bss set element symbol */
+#define	N_SETA	0x14		/* Absolute set element symbol */ //绝对集合元素符号
+#define	N_SETT	0x16		/* Text set element symbol */ //代码集合元素符号
+#define	N_SETD	0x18		/* Data set element symbol */ //数据集合元素符号
+#define	N_SETB	0x1A		/* Bss set element symbol */ //bss集合元素符号
 
-/* This is output from LD.  */
-#define N_SETV	0x1C		/* Pointer to set vector in data area.  */
+/* This is output from LD.  */ //下面是LD的输出
+#define N_SETV	0x1C		/* Pointer to set vector in data area.  */ //指向数据区中集合向量
 
 #ifndef N_RELOCATION_INFO_DECLARED
 
 /* This structure describes a single relocation to be performed.
    The text-relocation section of the file is a vector of these structures,
    all of which apply to the text section.
-   Likewise, the data-relocation section applies to the data section.  */
-
+   Likewise, the data-relocation section applies to the data section.  
+下面结构描述单个重定位操作的执行. 文件的代码重定位部分是这些结构的一个数组,所有这些适用于代码部分
+类似的,数据重定位部分用于数据部分 */
+//a.out目标文件中代码和数据重定位信息结构
 struct relocation_info
 {
-  /* Address (within segment) to be relocated.  */
+  /* Address (within segment) to be relocated.  */ //段内需要重定位的地址
   int r_address;
-  /* The meaning of r_symbolnum depends on r_extern.  */
+  /* The meaning of r_symbolnum depends on r_extern.  */ //r_symbolnum的含义与r_extern有关
   unsigned int r_symbolnum:24;
-  /* Nonzero means value is a pc-relative offset
-     and it should be relocated for changes in its own address
+  /* Nonzero means value is a pc-relative offset 非0意味着值是一个pc相关的偏移值,因而在其
+     and it should be relocated for changes in its own address 自己地址空间以及符号或指定的字节改变时,需要被重定位
      as well as for changes in the symbol or section specified.  */
   unsigned int r_pcrel:1;
-  /* Length (as exponent of 2) of the field to be relocated.
-     Thus, a value of 2 indicates 1<<2 bytes.  */
+  /* Length (as exponent of 2) of the field to be relocated. 需要被重定位的字段长度(2的次方)
+     Thus, a value of 2 indicates 1<<2 bytes. 因此若值是2则表示1<<2 字节数 */
   unsigned int r_length:2;
-  /* 1 => relocate with value of symbol.
+  /* 1 => relocate with value of symbol. 1=>以符号的值重定位. r_symbolnum 是文件符号表中符号的索引
           r_symbolnum is the index of the symbol
 	  in file's the symbol table.
-     0 => relocate with the address of a segment.
-          r_symbolnum is N_TEXT, N_DATA, N_BSS or N_ABS
+     0 => relocate with the address of a segment. 0=> 以段的地址进行重定位, r_symbolnum 是N_TEXT,N_DATA,N_BSS,N_BAS
+          r_symbolnum is N_TEXT, N_DATA, N_BSS or N_ABS (N_EXT比特位也可以被设置,但无意义)
 	  (the N_EXT bit may be set also, but signifies nothing).  */
   unsigned int r_extern:1;
-  /* Four bits that aren't used, but when writing an object file
-     it is desirable to clear them.  */
+  /* Four bits that aren't used, but when writing an object file 没有使用的4个bit位,但是当进行写一个目标
+     it is desirable to clear them. 文件时,最好将它们复位掉 */
   unsigned int r_pad:4;
 };
 #endif /* no N_RELOCATION_INFO_DECLARED.  */
