@@ -6,7 +6,9 @@
 
 #include <ctype.h>
 
-char _ctmp;
+char _ctmp; //临时字符变量, 供ctype.h文件中转换字符宏函数使用
+//字符特性数组(表), 定义了各个字符对应的属性, 这些属性类型(如_C等)在ctype.h中定义. 用于判断字符是控制字符(_C),大写字符(_U)
+//小写字符_L等所属类型
 unsigned char _ctype[] = {0x00,			/* EOF */
 _C,_C,_C,_C,_C,_C,_C,_C,			/* 0-7 */
 _C,_C|_S,_C|_S,_C|_S,_C|_S,_C|_S,_C,_C,		/* 8-15 */
