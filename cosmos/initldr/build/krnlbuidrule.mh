@@ -1,0 +1,31 @@
+###################################################################
+#		krnlbuidrule自动化编译配置文件 Makefile		  #
+#				彭东 
+###################################################################
+
+CCSTR		= 	'CC -[M] 正在构建... '$<
+PRINTCSTR 	=	@echo $(CCSTR) 
+
+%.o : $(CCBUILDPATH)%.asm
+	@echo "$(CCBUILDPATH) asm gen object CMD: $(ASM) $(ASMBFLAGS) -o $@ $<"
+	$(ASM) $(ASMBFLAGS) -o $@ $<
+
+%.o : $(CCBUILDPATH)%.c
+	@echo "$(CCBUILDPATH) c gen object CMD: $(CC) $(BTCFLAGS) -o $@ $<"
+	$(CC) $(BTCFLAGS) -o $@ $<
+
+%.lds : $(CCBUILDPATH)%.S
+	@echo "$(CCBUILDPATH) .S gen lds CMD: $(CC) $(CPPFLGSLDS) -o $@ $<";
+	$(CC) $(CPPFLGSLDS) -o $@ $<
+
+%.mh : $(CCBUILDPATH)%.S
+	@echo "$(CCBUILDPATH) .S gen mh CMD: $(CC) $(CPPFLGSLDS) -o $@ $<"
+	$(CC) $(CPPFLGSLDS) -o $@ $<
+
+%.lib : $(CCBUILDPATH)%.c
+	@echo "$(CCBUILDPATH) .c gen lib CMD: $(CC) $(CFLAGS) -o $@ $<"
+	$(CC) $(CFLAGS) -o $@ $<
+	
+%.lib : $(CCBUILDPATH)%.asm
+	@echo "$(CCBUILDPATH) .asm gen lib CMD: $(ASM) $(ASMKFLAGS) -o $@ $<"
+	$(ASM) $(ASMKFLAGS) -o $@ $<

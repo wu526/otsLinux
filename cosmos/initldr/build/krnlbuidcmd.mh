@@ -1,0 +1,55 @@
+###################################################################
+#		krnlbuidcmd自动化编译配置文件 Makefile		  #
+#				彭东  ＠ 2012.08.15.10.20	  #
+###################################################################
+
+ASM		= nasm
+CC		= gcc
+LD		= ld
+DD		= dd 
+RM		= rm
+OBJCOPY = objcopy
+
+# OJCYFLAGS 去掉 -S
+OJCYFLAGS = -O binary
+
+LDRIMG		= ./lmoskrlimg
+ASMBFLAGS	= -I $(HEADFILE_PATH) -f elf
+ASMKFLAGS	= -I $(HEADFILE_PATH) -f elf64  #-mregparm=0-finline-functions-mcmodel=medium -mcmodel=large 
+
+# BTCFLAGS 去掉了 -Os, 增加 -g
+BTCFLAGS	= -I $(HEADFILE_PATH) -c -O0 -g -std=c99 -m32 -Wall -Wshadow -W -Wconversion -Wno-sign-conversion  -fno-stack-protector -fomit-frame-pointer -fno-builtin -fno-common  -fno-ident -ffreestanding  -fno-stack-protector -fomit-frame-pointer -Wno-unused-parameter -Wunused-variable
+
+# CFLAGS 去掉了 -O2, 增加 -g
+CFLAGS	= -I $(HEADFILE_PATH) -c -m64 -O0 -g -mcmodel=large -mno-red-zone -std=c99 -Wall -Wshadow -W -Wconversion -Wno-sign-conversion -fno-stack-protector  -fomit-frame-pointer -fno-builtin -fno-common  -fno-ident -ffreestanding  -Wno-unused-parameter -Wunused-variable #-fdata-sections -gstabs+
+
+CPPFLGSLDS	= $(HEADFILE_PATH) -E -P 
+CSCFLAGS = -I $(HEADFILE_PATH) -c -fno-builtin -fno-common -fno-stack-protector -fno-ident -ffreestanding
+SCFLAGS	= -I $(HEADFILE_PATH) -S -std=c99 -fno-ident -Wall -fno-builtin -fno-common -fno-stack-protector
+
+# LDFLAGS 去掉 -s
+LDFLAGS		= -static -T boot.lds -n -Map boot.map 
+
+# FDLDRLDFLG 去掉 -s
+FDLDRLDFLG	= -Ttext 0 -n -Map fdldr.map
+
+# LOADERLDFLAGS 去掉 -s
+LOADERLDFLAGS	= -T ldrld.lds -n -Map hdldr.map  
+
+# LDRIMHLDFLAGS 去掉 -s
+LDRIMHLDFLAGS = -s -T initldrimh.lds -n -Map initldrimh.map
+
+# LDRKRLLDFLAGS 去掉 -s
+LDRKRLLDFLAGS = -s -T initldrkrl.lds -n -Map initldrkrl.map  
+
+# LDRSVELDFLAGS 去掉 -s
+LDRSVELDFLAGS = -s -T initldrsve.lds -n -Map initldrsve.map 
+LDRIMGFLAGS = -m k
+
+# KERNELLDFLAGS 去掉 -s
+KERNELLDFLAGS	= -s -static -T kernelld.lds -n  -Map kernel.map #--entry=_start#-Ttext 0x500 target remote localhost:1234
+
+DBGKERNELLDFLAGS	= -static -T kernelld.lds -n  -Map kernel.map #--entry=_start#-Ttext 0x500 target remote localhost:1234
+
+# INITSHELLLDFLAGS 去掉 -s
+INITSHELLLDFLAGS = -s -static -T app.lds -n  -Map initshellldr.map
